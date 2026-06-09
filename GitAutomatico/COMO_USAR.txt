@@ -1,0 +1,47 @@
+============================================================
+  GitAutomatico - Instrucoes de uso
+============================================================
+
+PRE-REQUISITOS:
+  - Python 3.9 ou superior instalado
+  - Git instalado (https://git-scm.com/download/win)
+
+PASSO 1) Gere um token no GitHub
+  - Acesse: https://github.com/settings/tokens
+  - "Generate new token (classic)"
+  - Marque os escopos: repo, delete_repo, workflow
+  - Copie o token (ele aparece UMA unica vez)
+
+PASSO 2) Cole o token no codigo
+  - Abra: git_automatico.py
+  - Localize a linha:
+        GITHUB_TOKEN = "ghp_COLE_SEU_TOKEN_AQUI"
+  - Substitua pelo seu token, mantendo as aspas.
+
+PASSO 3) Gere o .exe
+  - De duplo clique em build.bat
+  - Aguarde a compilacao (1-3 minutos na primeira vez)
+  - O executavel ficara em: dist\GitAutomatico.exe
+
+PASSO 4) Use!
+  - Execute: dist\GitAutomatico.exe
+  - O .exe e standalone, voce pode copiar para qualquer
+    lugar / pendrive / outro PC e rodar.
+
+============================================================
+  IMPORTANTE
+============================================================
+  - O token fica EMBUTIDO no .exe. Nao compartilhe o
+    executavel publicamente.
+  - Se mudar o token, recompile com build.bat.
+  - O codigo fonte (.py) NAO precisa ser distribuido junto
+    com o .exe. O usuario final so executa o .exe.
+
+============================================================
+  ARQUIVOS DO PROJETO
+============================================================
+  git_automatico.py  -> codigo fonte principal
+  requirements.txt   -> dependencias Python
+  build.bat          -> script de compilacao
+  COMO_USAR.txt      -> este arquivo
+  dist/              -> saida da compilacao (criado pelo build)
