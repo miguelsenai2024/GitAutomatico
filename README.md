@@ -1,8 +1,8 @@
-# dusagida
+# GitAutomatico.
 
 ## Sobre o projeto
 
-**dusagida** e um projeto em desenvolvimento. Adicione aqui uma breve descricao do que ele faz, qual problema resolve e quem deve usa-lo.
+**GitAutomatico** e um projeto em desenvolvimento. Adicione aqui uma breve descricao do que ele faz, qual problema resolve e quem deve usa-lo.
 
 ## Pre-requisitos
 
