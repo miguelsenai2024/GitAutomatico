@@ -1,5 +1,5 @@
 ============================================================
-  GitAutomatico - Instrucoes de uso
+  Autogit - Instrucoes de uso
 ============================================================
 
 PRE-REQUISITOS:
@@ -21,10 +21,10 @@ PASSO 2) Cole o token no codigo
 PASSO 3) Gere o .exe
   - De duplo clique em build.bat
   - Aguarde a compilacao (1-3 minutos na primeira vez)
-  - O executavel ficara em: dist\GitAutomatico.exe
+  - O executavel ficara em: dist\Autogit.exe
 
 PASSO 4) Use!
-  - Execute: dist\GitAutomatico.exe
+  - Execute: dist\Autogit.exe
   - O .exe e standalone, voce pode copiar para qualquer
     lugar / pendrive / outro PC e rodar.
 

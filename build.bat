@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 > nul
-title GitAutomatico - Build EXE
+title Autogit - Build EXE
 cls
 
 echo ============================================================
-echo   GitAutomatico - Compilador para .EXE
+echo   Autogit - Compilador para .EXE
 echo ============================================================
 echo.
 
@@ -40,7 +40,7 @@ echo [4/4] Compilando com PyInstaller...
 pyinstaller ^
     --onefile ^
     --console ^
-    --name GitAutomatico ^
+    --name Autogit ^
     --collect-all rich ^
     --collect-all questionary ^
     --hidden-import tkinter ^
@@ -61,7 +61,7 @@ echo ============================================================
 echo   [OK] Compilacao concluida com sucesso!
 echo ============================================================
 echo.
-echo   Arquivo gerado: dist\GitAutomatico.exe
+echo   Arquivo gerado: dist\Autogit.exe
 echo.
 echo   Na primeira execucao, o programa vai pedir seu token do GitHub.
 echo   Ele sera salvo em: %%LOCALAPPDATA%%\GitAuto\token.dat

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-GitAutomatico - Ferramenta de automacao para GitHub
+Autogit - Ferramenta de automacao para GitHub
 Compila com PyInstaller para gerar um .exe standalone.
 """
 
@@ -115,11 +115,12 @@ custom_style = Style([
 def banner():
     console.clear()
     title_art = (
-        "  ____ _ _      _         _                        _   _           \n"
-        " / ___(_) |_   / \\  _   _| |_ ___  _ __ ___   __ _| |_(_) ___ ___  \n"
-        "| |  _| | __| / _ \\| | | | __/ _ \\| '_ ` _ \\ / _` | __| |/ __/ _ \\ \n"
-        "| |_| | | |_ / ___ \\ |_| | || (_) | | | | | | (_| | |_| | (_| (_) |\n"
-        " \\____|_|\\__/_/   \\_\\__,_|\\__\\___/|_| |_| |_|\\__,_|\\__|_|\\___\\___/ \n"
+        "    _         _              _ _   \n"
+        "   / \\  _   _| |_ ___   __ _(_) |_ \n"
+        "  / _ \\| | | | __/ _ \\ / _` | | __|\n"
+        " / ___ \\ |_| | || (_) | (_| | | |_ \n"
+        "/_/   \\_\\__,_|\\__\\___/ \\__, |_|\\__|\n"
+        "                       |___/       "
     )
     body = Text()
     body.append(title_art, style="bold cyan")
@@ -849,7 +850,7 @@ def generate_readme(repo_name, description, username, project_types):
     md.append("")
     md.append("---")
     md.append("")
-    md.append("_README gerado automaticamente pelo **GitAutomatico**._")
+    md.append("_README gerado automaticamente pelo **Autogit**._")
     md.append("")
     return "\n".join(md)
 
@@ -961,7 +962,7 @@ def ask_gitignore_mode() -> tuple:
 
 def build_gitignore_from_patterns(patterns: list) -> str:
     """Gera conteudo de .gitignore a partir de uma lista de padroes."""
-    lines = ["# Gerado pelo GitAutomatico", ""]
+    lines = ["# Gerado pelo Autogit", ""]
     for p in patterns:
         lines.append(p)
     return "\n".join(lines) + "\n"
@@ -1195,7 +1196,7 @@ def push_to_new_repo(folder, repo_info, username, description, include_env, giti
             run_git(["config", "user.email", f"{username}@users.noreply.github.com"], folder)
 
         progress.update(t, description="[cyan]Criando commit...")
-        c = run_git(["commit", "-m", "Initial commit via GitAutomatico"], folder)
+        c = run_git(["commit", "-m", "Initial commit via Autogit"], folder)
         if c.returncode != 0 and "nothing to commit" not in (c.stdout + c.stderr).lower():
             # Se ja tinha commits, ignora
             pass
@@ -1237,7 +1238,7 @@ def push_to_existing_repo(folder, repo_info, username, include_env, gitignore_pa
     is_private = bool(repo_info.get("private", False))
     push_branch = target_branch or default_branch
 
-    tmp = tempfile.mkdtemp(prefix="gitautomatico_")
+    tmp = tempfile.mkdtemp(prefix="autogit_")
     clone_dir = os.path.join(tmp, "repo")
 
     try:
@@ -1313,7 +1314,7 @@ def push_to_existing_repo(folder, repo_info, username, include_env, gitignore_pa
         success(f"{added} arquivos indexados.")
         console.print()
 
-        final_msg = commit_msg or "Update via GitAutomatico"
+        final_msg = commit_msg or "Update via Autogit"
 
         with Progress(
             SpinnerColumn(style="cyan"),
@@ -1572,7 +1573,7 @@ def flow_existing(username):
     console.print()
     commit_msg = questionary.text(
         "Mensagem do commit (ENTER para padrao):",
-        default="Update via GitAutomatico",
+        default="Update via Autogit",
         style=custom_style,
     ).ask()
     if commit_msg is None:
@@ -2012,11 +2013,62 @@ def flow_view_repos(username):
         console.print()
 
 
+def setup_dns_fallback():
+    """Verifica conexao com api.github.com. Se falhar, redireciona para um IP funcional (fallback DNS)."""
+    # Testa conexao normal primeiro com um timeout curto
+    try:
+        requests.get("https://api.github.com", timeout=2.5)
+        # Se funcionar, nao precisa de nada
+        return
+    except requests.exceptions.RequestException:
+        pass
+
+    # Se falhou, vamos tentar obter um IP dos EUA
+    fallback_ip = "140.82.113.5"  # IP padrao de backup
+    try:
+        # Tenta resolver via Google DNS-over-HTTPS usando subnet dos EUA
+        r = requests.get("https://dns.google/resolve?name=api.github.com&edns_client_subnet=8.8.8.8", timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            ips = [ans["data"] for ans in data.get("Answer", []) if ans.get("type") == 1]
+            if ips:
+                fallback_ip = ips[0]
+    except Exception:
+        # Se falhar, tenta via Cloudflare
+        try:
+            r = requests.get("https://1.1.1.1/dns-query?name=api.github.com&edns_client_subnet=8.8.8.8", 
+                             headers={"accept": "application/dns-json"}, timeout=3)
+            if r.status_code == 200:
+                data = r.json()
+                ips = [ans["data"] for ans in data.get("Answer", []) if ans.get("type") == 1]
+                if ips:
+                    fallback_ip = ips[0]
+        except Exception:
+            pass
+
+    # Aplica o patch no urllib3
+    try:
+        import urllib3.util.connection as urllib3_connection
+        orig_create_connection = urllib3_connection.create_connection
+
+        def patched_create_connection(address, *args, **kwargs):
+            host, port = address
+            if host == "api.github.com":
+                return orig_create_connection((fallback_ip, port), *args, **kwargs)
+            return orig_create_connection(address, *args, **kwargs)
+
+        urllib3_connection.create_connection = patched_create_connection
+        console.print(f"[dim]Conexao direta com api.github.com falhou. Usando IP alternativo: {fallback_ip}[/dim]\n")
+    except Exception as e:
+        console.print(f"[dim]Nao foi possivel aplicar o patch de DNS: {e}[/dim]")
+
+
 # ============================================================
 #  MAIN
 # ============================================================
 def main():
     banner()
+    setup_dns_fallback()
     check_token()
     git_version = check_git_installed()
     console.print(f"[dim]{git_version}[/dim]\n")
