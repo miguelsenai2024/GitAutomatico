@@ -46,7 +46,6 @@ def get_config_dir() -> Path:
 TOKEN_FILE  = get_config_dir() / "token.dat"
 CUSTOM_IGNORE_FILE = get_config_dir() / "custom_gitignore.json"
 DEFAULT_IGNORE_FILE = get_config_dir() / "default_gitignore.json"
-CUSTOM_LISTS_FILE = get_config_dir() / "custom_lists.json"
 
 
 def load_token() -> str:
@@ -75,27 +74,6 @@ def load_custom_ignore() -> list:
 
 def save_custom_ignore(patterns: list):
     CUSTOM_IGNORE_FILE.write_text(json.dumps(patterns, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def load_custom_lists() -> dict:
-    """Carrega o dicionario de listas personalizadas criadas {nome_lista: [patterns]}."""
-    if CUSTOM_LISTS_FILE.exists():
-        try:
-            data = json.loads(CUSTOM_LISTS_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-    # Se existia a lista personalizada antiga (custom_gitignore.json), migra/carrega
-    old_custom = load_custom_ignore()
-    if old_custom:
-        return {"Minha Lista Personalizada": old_custom}
-    return {}
-
-
-def save_custom_lists(lists_dict: dict):
-    """Salva o dicionario de listas personalizadas criadas."""
-    CUSTOM_LISTS_FILE.write_text(json.dumps(lists_dict, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_default_ignore() -> list:
@@ -259,57 +237,20 @@ def reset_token():
 
 
 def gh_get_user():
-    global GITHUB_TOKEN
-    while True:
-        try:
-            with Progress(
-                SpinnerColumn(style="cyan"),
-                TextColumn("[cyan]Autenticando no GitHub..."),
-                console=console, transient=True,
-            ) as p:
-                p.add_task("auth", total=None)
-                r = requests.get(f"{API_BASE}/user", headers=gh_headers(), timeout=20)
-            if r.status_code == 200:
-                return r.json()
-            elif r.status_code == 401:
-                err("Token invalido ou expirado.")
-            else:
-                err(f"Falha na autenticacao ({r.status_code}): {r.text[:200]}")
-        except requests.exceptions.RequestException as e:
-            err(f"Erro de conexao ao autenticar: {e}")
-
-        console.print()
-        op = questionary.select(
-            "O que deseja fazer?",
-            choices=[
-                questionary.Choice("Informar outro token do GitHub", value="retry"),
-                questionary.Choice("Sair", value="exit"),
-            ],
-            style=custom_style,
-        ).ask()
-
-        if op in (None, "exit"):
-            console.print("\n[bold cyan]Saindo...[/bold cyan]\n")
-            sys.exit(0)
-
-        console.print()
-        console.print(Panel(
-            "[bold white]Informe um novo token do GitHub.[/bold white]\n\n"
-            "Para gerar um token:\n"
-            "  1. Acesse: [link=https://github.com/settings/tokens]https://github.com/settings/tokens[/link]\n"
-            "  2. Clique em [bold]Generate new token (classic)[/bold]\n"
-            "  3. Marque os escopos: [bold]repo[/bold], [bold]workflow[/bold]\n"
-            "  4. Copie e cole abaixo",
-            border_style="yellow", box=box.ROUNDED, title="[yellow]Atualizar Token[/yellow]",
-        ))
-        token = questionary.password("Cole seu novo token do GitHub:", style=custom_style).ask()
-        if token and token.strip():
-            save_token(token.strip())
-            GITHUB_TOKEN = token.strip()
-            success(f"Novo token salvo em {TOKEN_FILE}")
-            console.print()
-        else:
-            warn("Token nao informado.")
+    with Progress(
+        SpinnerColumn(style="cyan"),
+        TextColumn("[cyan]Autenticando no GitHub..."),
+        console=console, transient=True,
+    ) as p:
+        p.add_task("auth", total=None)
+        r = requests.get(f"{API_BASE}/user", headers=gh_headers(), timeout=20)
+    if r.status_code == 401:
+        err("Token invalido ou expirado.")
+        pause_exit(1)
+    if r.status_code != 200:
+        err(f"Falha na autenticacao ({r.status_code}): {r.text[:200]}")
+        pause_exit(1)
+    return r.json()
 
 
 def gh_create_repo(name, private, description=""):
@@ -600,34 +541,7 @@ HUGE_DIRS = [
     "bin", "obj", ".vs",
     ".next", ".nuxt", ".cache",
     "vendor", ".gradle",
-    ".pnpm",
 ]
-
-# Conjunto para lookup rapido durante a copia
-_HUGE_DIRS_SET = set(HUGE_DIRS)
-
-
-def _ignore_huge_dirs(directory, contents):
-    """Funcao de filtro para shutil.copytree: ignora pastas pesadas.
-    Evita copiar node_modules/.pnpm etc. que possuem caminhos
-    extremamente longos e causam WinError 3 no Windows."""
-    return _HUGE_DIRS_SET.intersection(contents)
-
-
-def _safe_rmtree(path):
-    """Remove uma arvore de diretorios de forma segura, tratando caminhos
-    longos no Windows (> 260 chars) usando o prefixo \\\\?\\ ."""
-    if sys.platform == "win32":
-        # Converte para caminho absoluto com prefixo longo
-        abs_path = os.path.abspath(path)
-        if not abs_path.startswith("\\\\?\\"):
-            abs_path = "\\\\?\\" + abs_path
-        try:
-            shutil.rmtree(abs_path, ignore_errors=True)
-        except Exception:
-            shutil.rmtree(path, ignore_errors=True)
-    else:
-        shutil.rmtree(path, ignore_errors=True)
 
 
 def detect_huge_dirs(folder):
@@ -987,69 +901,43 @@ def get_default_patterns() -> list:
 
 def ask_gitignore_mode() -> tuple:
     """
-    Pergunta ao usuario qual lista de gitignore usar na hora do upload.
-    Oferece:
-    - Lista padrao de fabrica (original)
-    - Lista padrao editada (se existir)
-    - Novas listas criadas (se existirem)
-    - Opcao de definir lista avulsa ou visualizar
+    Pergunta ao usuario qual modo de gitignore usar.
+    Retorna (mode, patterns) onde mode e 'default' | 'custom' | 'view'.
     """
-    custom_lists = load_custom_lists()
-    edited_default = load_default_ignore()
-
     while True:
-        choices = [
-            questionary.Choice(f"Lista padrao de fabrica (original - {len(FACTORY_IGNORE_PATTERNS)} padroes)", value="factory"),
-        ]
-
-        if edited_default:
-            choices.append(questionary.Choice(f"Lista padrao editada ({len(edited_default)} padroes)", value="default_edited"))
-
-        for name, pats in custom_lists.items():
-            choices.append(questionary.Choice(f"Nova lista criada: {name} ({len(pats)} padroes)", value=f"custom_{name}"))
-
-        choices.append(questionary.Choice("Definir uma lista avulsa para este envio", value="temp"))
-        choices.append(questionary.Choice("Visualizar padroes das listas antes de decidir", value="view"))
-
         mode = questionary.select(
-            "Qual lista de .gitignore deseja usar para este envio?",
-            choices=choices,
+            "Como deseja configurar o .gitignore?",
+            choices=[
+                questionary.Choice("Lista padrao completa (recomendado)", value="default"),
+                questionary.Choice("Definir lista personalizada",           value="custom"),
+                questionary.Choice("Visualizar lista padrao",               value="view"),
+            ],
             style=custom_style,
         ).ask()
 
         if mode == "view":
+            current = get_default_patterns()
             console.print()
             console.print(Panel(
-                "\n".join(f"  - {p}" for p in FACTORY_IGNORE_PATTERNS),
-                title=f"[cyan]Lista de Fabrica ({len(FACTORY_IGNORE_PATTERNS)} padroes)[/cyan]",
+                "\n".join(current),
+                title="[cyan]Lista padrao de gitignore[/cyan]",
                 border_style="cyan", box=box.ROUNDED,
             ))
-            if edited_default:
-                console.print(Panel(
-                    "\n".join(f"  - {p}" for p in edited_default),
-                    title=f"[yellow]Lista Padrao Editada ({len(edited_default)} padroes)[/yellow]",
-                    border_style="yellow", box=box.ROUNDED,
-                ))
-            for name, pats in custom_lists.items():
-                console.print(Panel(
-                    "\n".join(f"  - {p}" for p in pats),
-                    title=f"[magenta]Lista Criada: {name} ({len(pats)} padroes)[/magenta]",
-                    border_style="magenta", box=box.ROUNDED,
-                ))
             console.print()
-            continue
+            continue  # volta pro menu
 
-        if mode == "factory":
-            return "factory", list(FACTORY_IGNORE_PATTERNS)
+        if mode == "custom":
+            saved = load_custom_ignore()
+            if saved:
+                console.print(f"[dim]Lista salva ({len(saved)} entradas):[/dim]")
+                for p in saved:
+                    console.print(f"  [bright_black]-[/bright_black] {p}")
+                use_saved = questionary.confirm(
+                    "Usar lista salva?", default=True, style=custom_style
+                ).ask()
+                if use_saved:
+                    return "custom", saved
 
-        if mode == "default_edited":
-            return "default_edited", list(edited_default)
-
-        if mode and mode.startswith("custom_"):
-            name = mode[7:]
-            return f"custom:{name}", list(custom_lists.get(name, []))
-
-        if mode == "temp":
             console.print("[dim]Digite os padroes a ignorar, um por linha. Linha em branco para terminar.[/dim]")
             patterns = []
             while True:
@@ -1061,12 +949,15 @@ def ask_gitignore_mode() -> tuple:
                     break
                 patterns.append(entry.strip())
             if patterns:
-                return "temp", patterns
+                save_custom_ignore(patterns)
+                success(f"{len(patterns)} padroes salvos para proximas vezes.")
+                return "custom", patterns
             else:
-                warn("Nenhum padrao informado. Usando lista padrao de fabrica.")
-                return "factory", list(FACTORY_IGNORE_PATTERNS)
+                warn("Nenhum padrao informado. Usando lista padrao.")
+                return "default", get_default_patterns()
 
-        return "factory", list(FACTORY_IGNORE_PATTERNS)
+        # default
+        return "default", get_default_patterns()
 
 
 def build_gitignore_from_patterns(patterns: list) -> str:
@@ -1384,30 +1275,15 @@ def push_to_existing_repo(folder, repo_info, username, include_env, gitignore_pa
             progress.update(t, description="[cyan]Copiando arquivos da pasta selecionada...")
 
             # Copia o conteudo da pasta selecionada para dentro do clone (sem sobrescrever .git)
-            # Usa _ignore_huge_dirs para pular node_modules, .pnpm, .venv etc.
-            # Essas pastas possuem caminhos longos demais para o Windows (MAX_PATH 260)
-            # e ja sao ignoradas pelo .gitignore de qualquer forma.
             for item in os.listdir(folder):
                 if item == ".git":
-                    continue
-                # Pula pastas grandes no nivel raiz tambem
-                if item in _HUGE_DIRS_SET:
                     continue
                 src = os.path.join(folder, item)
                 dst = os.path.join(clone_dir, item)
                 if os.path.isdir(src):
                     if os.path.exists(dst):
-                        _safe_rmtree(dst)
-                    try:
-                        shutil.copytree(src, dst, ignore=_ignore_huge_dirs)
-                    except shutil.Error as e:
-                        # Log dos erros de copia mas nao falha - arquivos parciais
-                        # podem ser suficientes (ex: links simbolicos quebrados)
-                        warn(f"Alguns arquivos nao puderam ser copiados em '{item}':")
-                        for src_f, dst_f, why in e.args[0][:3]:
-                            console.print(f"  [dim]{os.path.basename(src_f)}: {why}[/dim]")
-                        if len(e.args[0]) > 3:
-                            console.print(f"  [dim]... e mais {len(e.args[0]) - 3} arquivo(s)[/dim]")
+                        shutil.rmtree(dst, ignore_errors=True)
+                    shutil.copytree(src, dst)
                 else:
                     shutil.copy2(src, dst)
 
@@ -1464,7 +1340,7 @@ def push_to_existing_repo(folder, repo_info, username, include_env, gitignore_pa
             progress.update(t, description="[green]Push concluido!")
             return True, ""
     finally:
-        _safe_rmtree(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 
@@ -2254,28 +2130,88 @@ def main():
         banner()
 
 
-def _view_default_gitignore():
-    current = get_default_patterns()
-    has_edited = DEFAULT_IGNORE_FILE.exists()
-    removed_from_factory = [p for p in FACTORY_IGNORE_PATTERNS if p not in current]
+def _manage_gitignore():
+    """Menu para gerenciar listas de gitignore."""
+    while True:
+        # Verifica estado das listas
+        has_custom_default = DEFAULT_IGNORE_FILE.exists()
+        has_custom_list = CUSTOM_IGNORE_FILE.exists()
+        current_default = get_default_patterns()
 
-    lines = []
-    lines.append(f"[bold cyan]Padroes ativos na lista padrao ({len(current)}):[/bold cyan]\n")
-    for i, p in enumerate(current, 1):
-        lines.append(f"  [dim]{i:3}.[/dim] {p}")
+        status_default = "[yellow]editada[/yellow]" if has_custom_default else "[green]fabrica[/green]"
+        status_custom = f"[green]{len(load_custom_ignore())} padroes[/green]" if has_custom_list else "[dim]nao definida[/dim]"
 
-    if removed_from_factory:
-        lines.append(f"\n[bold red]Itens da lista de fabrica que haviam antes e foram REMOVIDOS ({len(removed_from_factory)}):[/bold red]\n")
-        for p in removed_from_factory:
-            lines.append(f"  [red]- {p}[/red]")
+        console.print()
+        console.print(Panel(
+            f"[bold]Lista padrao:[/bold]         {status_default} ({len(current_default)} padroes)\n"
+            f"[bold]Lista personalizada:[/bold]  {status_custom}",
+            title="[cyan]Status das listas[/cyan]",
+            border_style="cyan", box=box.ROUNDED, title_align="left",
+        ))
+        console.print()
 
-    source = "[yellow]editada pelo usuario[/yellow]" if has_edited else "[green]fabrica (original)[/green]"
-    console.print()
-    console.print(Panel(
-        "\n".join(lines),
-        title=f"[cyan]Lista padrao - {source}[/cyan]",
-        border_style="cyan", box=box.ROUNDED,
-    ))
+        op = questionary.select(
+            "Gerenciar gitignore:",
+            choices=[
+                questionary.Choice("Visualizar lista padrao atual",                     value="view_default"),
+                questionary.Choice("Editar lista padrao (remover/adicionar padroes)",   value="edit_default"),
+                questionary.Choice("Restaurar lista padrao de fabrica",                 value="restore_factory"),
+                questionary.Separator(),
+                questionary.Choice("Editar lista personalizada (avulsa)",               value="edit_custom"),
+                questionary.Choice("Apagar lista personalizada salva",                  value="delete_custom"),
+                questionary.Separator(),
+                questionary.Choice("Voltar",                                            value="back"),
+            ],
+            style=custom_style,
+        ).ask()
+
+        if op in (None, "back"):
+            return
+
+        if op == "view_default":
+            console.print()
+            source = "[yellow]editada pelo usuario[/yellow]" if has_custom_default else "[green]fabrica (original)[/green]"
+            patterns = get_default_patterns()
+            numbered = []
+            for i, p in enumerate(patterns, 1):
+                numbered.append(f"  [dim]{i:3}.[/dim] {p}")
+            console.print(Panel(
+                "\n".join(numbered),
+                title=f"[cyan]Lista padrao ({len(patterns)} padroes) - {source}[/cyan]",
+                border_style="cyan", box=box.ROUNDED,
+            ))
+
+        elif op == "edit_default":
+            _edit_default_gitignore()
+
+        elif op == "restore_factory":
+            if not has_custom_default:
+                warn("A lista padrao ja e a de fabrica.")
+            else:
+                confirm = questionary.confirm(
+                    "Restaurar lista padrao para a versao de fabrica? Suas edicoes serao perdidas.",
+                    default=False, style=custom_style,
+                ).ask()
+                if confirm:
+                    DEFAULT_IGNORE_FILE.unlink(missing_ok=True)
+                    success(f"Lista padrao restaurada ({len(FACTORY_IGNORE_PATTERNS)} padroes de fabrica).")
+                else:
+                    warn("Operacao cancelada.")
+
+        elif op == "edit_custom":
+            ask_gitignore_mode()
+
+        elif op == "delete_custom":
+            if CUSTOM_IGNORE_FILE.exists():
+                CUSTOM_IGNORE_FILE.unlink()
+                success("Lista personalizada removida.")
+            else:
+                warn("Nenhuma lista personalizada salva.")
+
+        console.print()
+        cont = questionary.confirm("Continuar gerenciando listas?", default=True, style=custom_style).ask()
+        if not cont:
+            return
 
 
 def _edit_default_gitignore():
@@ -2289,14 +2225,10 @@ def _edit_default_gitignore():
     console.print("[dim]Padroes DESMARCADOS serao removidos da lista.[/dim]")
     console.print()
 
-    all_patterns_to_show = list(FACTORY_IGNORE_PATTERNS)
-    for p in current:
-        if p not in all_patterns_to_show:
-            all_patterns_to_show.append(p)
-
-    choices = [questionary.Choice(p, checked=(p in current)) for p in all_patterns_to_show]
+    # Checkbox para selecionar quais manter
+    choices = [questionary.Choice(p, checked=True) for p in current]
     kept = questionary.checkbox(
-        "Selecione os padroes a MANTER na lista padrao:",
+        f"Selecione os padroes a MANTER ({len(current)} atuais):",
         choices=choices,
         style=custom_style,
     ).ask()
@@ -2305,26 +2237,18 @@ def _edit_default_gitignore():
         warn("Operacao cancelada.")
         return
 
-    removed_from_factory = [p for p in FACTORY_IGNORE_PATTERNS if p not in kept]
-    added_extra = [p for p in kept if p not in FACTORY_IGNORE_PATTERNS]
+    removed_count = len(current) - len(kept)
+    if removed_count > 0:
+        console.print(f"  [yellow]{removed_count} padrao(oes) removido(s)[/yellow]")
 
-    console.print()
-    if removed_from_factory:
-        console.print(Panel(
-            "\n".join(f"  [red]- {p}[/red]" for p in removed_from_factory),
-            title=f"[bold red]Itens da lista de fabrica que haviam antes e foram REMOVIDOS ({len(removed_from_factory)}):[/bold red]",
-            border_style="red", box=box.ROUNDED,
-        ))
-    else:
-        success("Nenhum item da lista de fabrica foi removido.")
-
+    # Perguntar se quer adicionar novos
     console.print()
     add_more = questionary.confirm(
-        "Deseja adicionar novos padroes manuais?",
+        "Deseja adicionar novos padroes?",
         default=False, style=custom_style,
     ).ask()
 
-    new_patterns = list(kept)
+    new_patterns = list(kept)  # copia
     if add_more:
         console.print("[dim]Digite os padroes a adicionar, um por linha. Linha em branco para terminar.[/dim]")
         while True:
@@ -2341,22 +2265,32 @@ def _edit_default_gitignore():
                 new_patterns.append(pat)
                 success(f"Adicionado: {pat}")
 
+    # Resumo e confirmacao
+    diff_removed = [p for p in current if p not in new_patterns]
+    diff_added = [p for p in new_patterns if p not in current]
+
     console.print()
     summary_lines = [f"[bold]Total final:[/bold] {len(new_patterns)} padroes"]
-    if removed_from_factory:
-        summary_lines.append(f"[bold red]Removidos da lista de fabrica ({len(removed_from_factory)}):[/bold red]")
-        for p in removed_from_factory:
+    if diff_removed:
+        summary_lines.append(f"[bold red]Removidos ({len(diff_removed)}):[/bold red]")
+        for p in diff_removed:
             summary_lines.append(f"  [red]- {p}[/red]")
-    if added_extra:
-        summary_lines.append(f"[bold green]Adicionados/Mantidos extras ({len(added_extra)}):[/bold green]")
-        for p in added_extra:
+    if diff_added:
+        summary_lines.append(f"[bold green]Adicionados ({len(diff_added)}):[/bold green]")
+        for p in diff_added:
             summary_lines.append(f"  [green]+ {p}[/green]")
+    if not diff_removed and not diff_added:
+        summary_lines.append("[dim]Nenhuma alteracao.[/dim]")
 
     console.print(Panel(
         "\n".join(summary_lines),
-        title="[cyan]Resumo da edicao[/cyan]",
+        title="[cyan]Resumo das alteracoes[/cyan]",
         border_style="cyan", box=box.ROUNDED, title_align="left",
     ))
+
+    if not diff_removed and not diff_added:
+        info("Lista nao foi alterada.")
+        return
 
     confirm = questionary.confirm(
         "Salvar alteracoes na lista padrao?",
@@ -2367,182 +2301,6 @@ def _edit_default_gitignore():
         success(f"Lista padrao atualizada com {len(new_patterns)} padroes.")
     else:
         warn("Alteracoes descartadas.")
-
-
-def _create_new_custom_list():
-    console.print()
-    console.rule("[bold magenta]Criar uma nova lista padrao / personalizada[/bold magenta]")
-
-    list_name = questionary.text(
-        "Nome da nova lista:",
-        style=custom_style,
-        validate=lambda v: True if v.strip() else "Informe um nome valido.",
-    ).ask()
-
-    if not list_name:
-        return
-    list_name = list_name.strip()
-
-    custom_lists = load_custom_lists()
-    if list_name in custom_lists:
-        warn(f"Ja existe uma lista com o nome '{list_name}'. Ela sera sobrescrita se continuar.")
-
-    console.print()
-    info("Sugestao de padroes da lista padrao de fabrica (marque os que deseja incluir na nova lista):")
-    console.print("[dim]Use ESPACO para marcar/desmarcar e ENTER para confirmar.[/dim]\n")
-
-    choices = [questionary.Choice(p, checked=True) for p in FACTORY_IGNORE_PATTERNS]
-    selected_patterns = questionary.checkbox(
-        "Selecione os padroes que deseja colocar na nova lista:",
-        choices=choices,
-        style=custom_style,
-    ).ask()
-
-    if selected_patterns is None:
-        warn("Criacao de lista cancelada.")
-        return
-
-    removed_from_factory = [p for p in FACTORY_IGNORE_PATTERNS if p not in selected_patterns]
-    if removed_from_factory:
-        console.print()
-        console.print(Panel(
-            "\n".join(f"  [red]- {p}[/red]" for p in removed_from_factory),
-            title=f"[bold red]Padroes da lista de fabrica que NAO foram incluidos ({len(removed_from_factory)}):[/bold red]",
-            border_style="red", box=box.ROUNDED,
-        ))
-
-    console.print()
-    add_more = questionary.confirm(
-        "Deseja adicionar novos padroes extras para esta lista?",
-        default=False, style=custom_style,
-    ).ask()
-
-    final_patterns = list(selected_patterns)
-    if add_more:
-        console.print("[dim]Digite os padroes a adicionar, um por linha. Linha em branco para terminar.[/dim]")
-        while True:
-            entry = questionary.text(
-                f"Padrao extra #{len(final_patterns) - len(selected_patterns) + 1} (ENTER para finalizar):",
-                style=custom_style,
-            ).ask()
-            if entry is None or entry.strip() == "":
-                break
-            pat = entry.strip()
-            if pat in final_patterns:
-                warn(f"'{pat}' ja esta na lista.")
-            else:
-                final_patterns.append(pat)
-                success(f"Adicionado: {pat}")
-
-    if not final_patterns:
-        warn("Nenhum padrao selecionado. A lista nao foi salva.")
-        return
-
-    custom_lists[list_name] = final_patterns
-    save_custom_lists(custom_lists)
-    success(f"Nova lista '[bold]{list_name}[/bold]' criada com sucesso ({len(final_patterns)} padroes)!")
-
-
-def _view_created_custom_lists():
-    custom_lists = load_custom_lists()
-    if not custom_lists:
-        console.print()
-        warn("Nenhuma lista personalizada criada ainda.")
-        info("Use a opcao 'Criar uma nova lista padrao' no menu para criar uma.")
-        return
-
-    while True:
-        console.print()
-        console.rule(f"[bold magenta]Listas criadas ({len(custom_lists)})[/bold magenta]")
-
-        choices = []
-        for name, pats in custom_lists.items():
-            choices.append(questionary.Choice(f"{name} ({len(pats)} padroes)", value=name))
-        choices.append(questionary.Choice("Voltar", value="back"))
-
-        selected = questionary.select(
-            "Selecione uma lista para visualizar ou apagar:",
-            choices=choices,
-            style=custom_style,
-        ).ask()
-
-        if selected in (None, "back"):
-            return
-
-        pats = custom_lists[selected]
-        console.print()
-        console.print(Panel(
-            "\n".join(f"  [dim]{i:3}.[/dim] {p}" for i, p in enumerate(pats, 1)),
-            title=f"[cyan]Lista: {selected} ({len(pats)} padroes)[/cyan]",
-            border_style="cyan", box=box.ROUNDED,
-        ))
-
-        action = questionary.select(
-            f"O que deseja fazer com a lista '{selected}'?",
-            choices=[
-                questionary.Choice("Voltar as listas criadas", value="back"),
-                questionary.Choice("Apagar esta lista", value="delete"),
-            ],
-            style=custom_style,
-        ).ask()
-
-        if action == "delete":
-            confirm = questionary.confirm(f"Tem certeza que deseja apagar a lista '{selected}'?", default=False, style=custom_style).ask()
-            if confirm:
-                del custom_lists[selected]
-                save_custom_lists(custom_lists)
-                success(f"Lista '{selected}' apagada.")
-                if not custom_lists:
-                    return
-
-
-def _manage_gitignore():
-    """Menu para gerenciar listas de gitignore."""
-    while True:
-        console.print()
-        console.rule("[bold magenta]Gerenciador de Listas .gitignore[/bold magenta]")
-
-        op = questionary.select(
-            "Selecione uma opcao:",
-            choices=[
-                questionary.Choice("Visualizar lista padrao",         value="view_default"),
-                questionary.Choice("Editar lista padrao",             value="edit_default"),
-                questionary.Choice("Criar uma nova lista padrao",     value="create_custom"),
-                questionary.Choice("Visualizar listas criadas",       value="view_custom"),
-                questionary.Separator(),
-                questionary.Choice("Restaurar lista padrao de fabrica", value="restore_factory"),
-                questionary.Choice("Voltar ao menu principal",        value="back"),
-            ],
-            style=custom_style,
-        ).ask()
-
-        if op in (None, "back"):
-            return
-
-        if op == "view_default":
-            _view_default_gitignore()
-        elif op == "edit_default":
-            _edit_default_gitignore()
-        elif op == "create_custom":
-            _create_new_custom_list()
-        elif op == "view_custom":
-            _view_created_custom_lists()
-        elif op == "restore_factory":
-            if not DEFAULT_IGNORE_FILE.exists():
-                warn("A lista padrao ja e a de fabrica.")
-            else:
-                confirm = questionary.confirm(
-                    "Restaurar lista padrao para a versao de fabrica? Suas edicoes serao perdidas.",
-                    default=False, style=custom_style,
-                ).ask()
-                if confirm:
-                    DEFAULT_IGNORE_FILE.unlink(missing_ok=True)
-                    success(f"Lista padrao restaurada ({len(FACTORY_IGNORE_PATTERNS)} padroes de fabrica).")
-
-        console.print()
-        cont = questionary.confirm("Continuar gerenciando listas?", default=True, style=custom_style).ask()
-        if not cont:
-            return
 
 
 if __name__ == "__main__":

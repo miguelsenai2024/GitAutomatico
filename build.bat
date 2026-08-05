@@ -11,21 +11,28 @@ echo.
 REM Verifica Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [X] Python nao encontrado no PATH!
-    echo     Instale em: https://www.python.org/downloads/
-    pause
-    exit /b 1
+    py --version >nul 2>&1
+    if errorlevel 1 (
+        echo [X] Python nao encontrado no PATH!
+        echo     Instale em: https://www.python.org/downloads/
+        pause
+        exit /b 1
+    ) else (
+        set PYTHON_CMD=py
+    )
+) else (
+    set PYTHON_CMD=python
 )
 
 echo [1/4] Criando ambiente virtual...
 if not exist ".venv\" (
-    python -m venv .venv
+    %PYTHON_CMD% -m venv .venv
 )
 
 echo [2/4] Ativando ambiente e instalando dependencias...
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip >nul
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 (
     echo [X] Falha ao instalar dependencias.
     pause
